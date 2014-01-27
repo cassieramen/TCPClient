@@ -53,40 +53,49 @@ int main(int argc, char * argv[]) {
     /* create socket */
     sock = socket(AF_INET,SOCK_STREAM,0);
     if (sock<0) { //the socket couldn't be created
-        minet_perror("Could not create the socket");
+        minet_perror("Could not create the socket\n");
 	exit(-1);
     }
 
     // Do DNS lookup
     /* Hint: use gethostbyname() */
     site = gethostbyname(server_name);
-
+    if(site == NULL) {
+        minet_perror("Could not resolve hostname");
+        minet_close(sock);
+        exit(-1);
+    }
     /* set address sockaddr_in struct has fields:
  *   short sin_family
  *   unsigned short sin_port
  *   IN_ADDR sin_addr
  *   char sin_zero[8] |||||| this is just padding*/
     sa.sin_family = AF_INET;
-    bcopy((char*) site->h_addr, (char*)  &sa.sin_addr.s_addr, site->h_length);
     sa.sin_port = htons(server_port);
+    sa.sin_addr.s_addr = *(unsigned long *) site->h_addr_list[0]; //from powerpoint, don't know why this is failing
+    //bcopy((char *) site->h_addr_list[0], (char *) &sa.sin_addr.s_addr, site->h_length);
 
     /* connect socket */
     int connection = minet_connect(sock, (struct sockaddr_in *) &sa);
     if (connection != 0) {
-        minet_perror("Could not connect");
+        minet_perror("Could not connect\n");
         minet_close(sock);
         exit(-1);
     }
 
+    fprintf(wheretoprint, "Socket Connected\n");
+
     /* send request */
-    req = (char *) malloc(15 + strlen(server_path));
-    sprintf(req, "GET %s HTTP/1.0\n\n",server_path);
+    req = (char *) malloc(17 + strlen(server_path));
+    sprintf(req, "GET %s HTTP/1.0\r\n",server_path);
     int write = minet_write(sock, req, strlen(req));
     if (write<0) {
        minet_perror("HTTP GET request failed");
        minet_close(sock);
        exit(-1);
     }
+
+    fprintf(wheretoprint, "Sent HTTP request \n");
 
     /* wait till socket can be read */
     /* Hint: use select(), and ignore timeout for now. */
@@ -103,8 +112,10 @@ int main(int argc, char * argv[]) {
        minet_perror("Socket not ready");
        minet_close(sock);
        exit(-1);
-    } 
- 
+    }
+
+    fprintf(wheretoprint, "Socket ready to be read \n"); 
+
     /* first read loop -- read headers */
     
     /* examine return code */   
@@ -120,13 +131,12 @@ int main(int argc, char * argv[]) {
     sscanf(buf, "%*s %d", &rc);
     if (rc !=200) {
         ok = false;
-    }
+    } 
 
     /* print first part of response */
 
     /* second read loop -- print out the rest of the response */
     
-    /*close socket and deinitialize */
 
     fprintf(wheretoprint, "Request status is: %d\n", rc);
     
@@ -135,8 +145,11 @@ int main(int argc, char * argv[]) {
          response++;
     }
 
+
+    /*close socket and deinitialize */
+
     if (ok) {
-        fprintf(wheretoprint, response);
+        fprintf(wheretoprint, buf);
         while((datalen=minet_read(sock,buf,BUFSIZE)) > 0) {
              buf[datalen] = '\0';
              fprintf(wheretoprint,"%s",buf);
