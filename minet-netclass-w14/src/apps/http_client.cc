@@ -51,25 +51,76 @@ int main(int argc, char * argv[]) {
     }
 
     /* create socket */
+    sock = socket(AF_INET,SOCK_STREAM,0);
+    if (sock<0) { //the socket couldn't be created
+        minet_perror("Could not create the socket");
+	exit(-1);
+    }
 
     // Do DNS lookup
     /* Hint: use gethostbyname() */
+    site = gethostbyname(server_name);
 
-    /* set address */
+    /* set address sockaddr_in struct has fields:
+ *   short sin_family
+ *   unsigned short sin_port
+ *   IN_ADDR sin_addr
+ *   char sin_zero[8] |||||| this is just padding*/
+    sa.sin_family = AF_INET;
+    bcopy((char*) site->h_addr, (char*)  &sa.sin_addr.s_addr, site->h_length);
+    sa.sin_port = htons(server_port);
 
     /* connect socket */
-    
+    int connection = minet_connect(sock, (struct sockaddr_in *) &sa);
+    if (connection != 0) {
+        minet_perror("Could not connect");
+        minet_close(sock);
+        exit(-1);
+    }
+
     /* send request */
+    req = (char *) malloc(15 + strlen(server_path));
+    sprintf(req, "GET %s HTTP/1.0\n\n",server_path);
+    int write = minet_write(sock, req, strlen(req));
+    if (write<0) {
+       minet_perror("HTTP GET request failed");
+       minet_close(sock);
+       exit(-1);
+    }
 
     /* wait till socket can be read */
     /* Hint: use select(), and ignore timeout for now. */
-    
+    FD_ZERO(&set);
+    FD_SET(sock, &set);
+
+    if(FD_ISSET(sock, &set) == 0) {
+        minet_perror("Socket not added");
+        minet_close(sock);
+        exit(-1);
+    }
+
+    if(minet_select(sock+1, &set, 0, 0, 0) < 0) {
+       minet_perror("Socket not ready");
+       minet_close(sock);
+       exit(-1);
+    } 
+ 
     /* first read loop -- read headers */
     
     /* examine return code */   
     //Skip "HTTP/1.0"
     //remove the '\0'
     // Normal reply has return code 200
+    int read = minet_read(sock ,buf, BUFSIZE);
+    if (read<0) {
+        minet_perror("Could not decode response");
+        minet_close(sock);
+        exit(-1);
+    }
+    sscanf(buf, "%*s %d", &rc);
+    if (rc !=200) {
+        ok = false;
+    }
 
     /* print first part of response */
 
@@ -77,10 +128,25 @@ int main(int argc, char * argv[]) {
     
     /*close socket and deinitialize */
 
+    fprintf(wheretoprint, "Request status is: %d\n", rc);
+    
+    char *response = buf;
+    while(!(response[0] == '\n' && response[-2] == '\n')) {
+         response++;
+    }
 
     if (ok) {
+        fprintf(wheretoprint, response);
+        while((datalen=minet_read(sock,buf,BUFSIZE)) > 0) {
+             buf[datalen] = '\0';
+             fprintf(wheretoprint,"%s",buf);
+        }
+        minet_close(sock);
+        minet_deinit();
 	return 0;
     } else {
+        minet_close(sock);
+        minet_deinit();
 	return -1;
     }
 }
