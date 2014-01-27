@@ -1,0 +1,48 @@
+
+# Ignore compiled Minet modules
+app
+arp_module
+device_driver
+ethernet_mux
+http_client
+http_server1
+http_server2
+http_server3
+icmp_app
+icmp_module
+ip_module
+ip_module_diffusion
+ip_module_routing
+ip_mux
+ipother_module
+monitor
+other_module
+sock_module
+sock_test_app
+sock_test_tcp
+tcp_client
+tcp_module
+tcp_server
+test_arp
+test_bitsource
+test_raw_ethernet_packet_buffer
+test_reader
+test_writer
+udp_client
+udp_module
+udp_server
+
+# Ignore the .dependencies file.  This should be generated using "make depend"
+.dependencies
+
+# Ignore the file containing process IDs of every minet module
+pids
+
+# Ignore all object files
+*.[oa]
+
+# Ignore tilde files (backups)
+*~
+
+# Ignore log files
+*.log
