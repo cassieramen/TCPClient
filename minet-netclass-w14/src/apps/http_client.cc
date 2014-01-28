@@ -83,19 +83,19 @@ int main(int argc, char * argv[]) {
         exit(-1);
     }
 
-    fprintf(wheretoprint, "Socket Connected\n");
+    //fprintf(wheretoprint, "Socket Connected\n");
 
     /* send request */
-    req = (char *) malloc(17 + strlen(server_path));
-    sprintf(req, "GET %s HTTP/1.0\r\n",server_path);
-    int write = minet_write(sock, req, strlen(req));
+    req = (char *) malloc(strlen("GET  HTTP/1.0\r\n\r\n") + strlen(server_path) + 1);
+    sprintf(req, "GET %s HTTP/1.0\r\n\r\n",server_path);
+    int write = write_n_bytes(sock, req, strlen(req));
     if (write<0) {
        minet_perror("HTTP GET request failed");
        minet_close(sock);
        exit(-1);
     }
 
-    fprintf(wheretoprint, "Sent HTTP request \n");
+    //fprintf(wheretoprint, "Sent HTTP request: %s", req);
 
     /* wait till socket can be read */
     /* Hint: use select(), and ignore timeout for now. */
@@ -114,52 +114,66 @@ int main(int argc, char * argv[]) {
        exit(-1);
     }
 
-    fprintf(wheretoprint, "Socket ready to be read \n"); 
+    //fprintf(wheretoprint, "Socket ready to be read \n"); 
 
     /* first read loop -- read headers */
+    while((rc = minet_read(sock, buf + datalen, BUFSIZE - datalen))<0) {
+        datalen += rc;
+        buf[datalen] = '\0';
+
+        if((endheaders = strstr(buf, "\r\n\r\n")) != NULL) {
+            endheaders += 4;
+            break;
+        }
+    }  
     
-    /* examine return code */   
-    //Skip "HTTP/1.0"
-    //remove the '\0'
-    // Normal reply has return code 200
-    int read = minet_read(sock ,buf, BUFSIZE);
+    
     if (read<0) {
         minet_perror("Could not decode response");
         minet_close(sock);
         exit(-1);
     }
-    sscanf(buf, "%*s %d", &rc);
-    if (rc !=200) {
+
+    /* examine return code */   
+    bptr = buf; //copy the response
+    bptr2 = strsep(&bptr, " ");//Skip "HTTP/1.0"
+    bptr2[strlen(bptr2)] = ' ';//remove the '\0'
+    bptr2 = strsep(&bptr, " ");
+
+    // Normal reply has return code 200
+    if (atoi(bptr2) !=200) {
         ok = false;
+        wheretoprint = stderr;
     } 
 
     /* print first part of response */
+    if(!ok) {
+        fprintf(wheretoprint, "%s\n", buf); //just spit all this out
+    } else {
+        fprintf(wheretoprint, "%s\n", endheaders);
+    }
 
     /* second read loop -- print out the rest of the response */
     
-
-    fprintf(wheretoprint, "Request status is: %d\n", rc);
-    
-    char *response = buf;
-    while(!(response[0] == '\n' && response[-2] == '\n')) {
-         response++;
+    while((rc = minet_read(sock, buf, BUFSIZE)) != 0) {
+         if(rc < 0) {
+              minet_perror("Can't read data");
+              break;
+         }
+         datalen += rc;
+         buf[rc] = '\0';
+         fprintf(wheretoprint, "%s", buf);
     }
 
 
     /*close socket and deinitialize */
+    free(req);
+    minet_close(sock);
+    minet_deinit();
 
     if (ok) {
-        fprintf(wheretoprint, buf);
-        while((datalen=minet_read(sock,buf,BUFSIZE)) > 0) {
-             buf[datalen] = '\0';
-             fprintf(wheretoprint,"%s",buf);
-        }
-        minet_close(sock);
-        minet_deinit();
 	return 0;
     } else {
-        minet_close(sock);
-        minet_deinit();
 	return -1;
     }
 }
