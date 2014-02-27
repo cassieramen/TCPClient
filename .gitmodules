@@ -1,0 +1,3 @@
+[submodule "TCPClient"]
+	path = TCPClient
+	url = git@github.com:cassieramen/TCPClient.git
