@@ -156,7 +156,29 @@ int main(int argc, char *argv[])
 	}
 	case WRITE: {
 		cout << "Inside write statement" << endl; 
-		
+		unsigned int state = (*cs).state.GetState();
+
+		//we shouldn't be writing unless we have a connection established
+		if (state == ESTABLISHED) {
+			//the data is the max size - (two headers)
+			unsigned dataSize = MIN_MACRO(IP_PACKET_MAX_LENGTH-IP_HEADER_BASE_LENGTH-TCP_HEADER_BASE_LENGTH,s.data.GetSize());
+			//from buffer.h
+			Packet packet = Packet(s.data.ExtractFront(dataSize));
+			unsigned char ack = 0;
+			SET_ACK(ack);
+			constructPacket(packet,*cs, dataSize, ack);
+			MinetSend(mux, packet);
+
+			//as always, send info to our socket
+			SockRequestResponse resp;
+			resp.type = STATUS;
+			resp.bytes = dataSize;
+			resp.error = EOK;
+			resp.connection = s.connection;
+			MinetSend(sock, resp);
+		}
+
+
 		break;
 	}
 	case FORWARD: {
@@ -170,6 +192,8 @@ int main(int argc, char *argv[])
 		break;
 	}
 	case CLOSE: {
+	//FIN stuff. Need to send ack, recieve ack, send fin
+		cout << "Inside close statement" << endl;
 		break;
 	}
 	default: {
