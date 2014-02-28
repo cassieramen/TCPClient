@@ -21,7 +21,7 @@
 #include "sockint.h"
 #include "tcpstate.h"
 
-using std::cout;
+using std::cerr;
 using std::endl;
 using std::cerr;
 using std::string;
@@ -43,7 +43,7 @@ int main(int argc, char *argv[])
     return -1;
   }
 
-  cout << "tcp_module handling tcp traffic ........... \n";
+  cerr << "tcp_module handling tcp traffic ........... \n";
 
   if (MinetIsModuleInConfig(MINET_SOCK_MODULE) && sock==MINET_NOHANDLE) {
     MinetSendToMonitor(MinetMonitoringEvent("Can't accept from sock module"));
@@ -63,19 +63,62 @@ int main(int argc, char *argv[])
     } else {
       //  Data from the IP layer below  //
       if (event.handle==mux) {
+	cerr << "Recieved a MUX event \n\n" << endl;
 	Packet p;
+
 	MinetReceive(mux,p);
 	unsigned tcphlen=TCPHeader::EstimateTCPHeaderLength(p);
 	cerr << "estimated header len="<<tcphlen<<"\n";
+
 	p.ExtractHeaderFromPayload<TCPHeader>(tcphlen);
 	IPHeader ipl=p.FindHeader(Headers::IPHeader);
 	TCPHeader tcph=p.FindHeader(Headers::TCPHeader);
 
+
+	bool checkSum = tcph.IsCorrectChecksum(p);
 	cerr << "TCP Packet: IP Header is "<<ipl<<" and ";
 	cerr << "TCP Header is "<<tcph << " and ";
 
-	cerr << "Checksum is " << (tcph.IsCorrectChecksum(p) ? "VALID" : "INVALID");
+	cerr << "Checksum is " << (checkSum ? "VALID" : "INVALID");
 	
+
+	//let's get all the info for the ipheader and tcpheader
+	//functionss in tcp.h and ip.h
+	Connection connection; //put it all here
+
+	ipl.GetProtocol(connection.protocol);
+	ipl.GetSourceIP(connection.src);
+	ipl.GetDestIP(connection.dest);	
+
+	unsigned int seqNum, ackNum;
+	unsigned char flags;
+	unsigned short winSize;
+	
+	tcph.GetSourcePort(connection.destport);
+	tcph.GetDestPort(connection.srcport);
+	tcph.GetSeqNum(seqNum);
+	tcph.GetAckNum(ackNum);
+	tcph.GetFlags(flags);
+	tcph.GetWinSize(winSize);
+
+	//now locate the connection using our handy clist
+	ConnectionList<TCPState>::iterator cs = clist.FindMatching(connection);
+	
+	cerr << "\nWe think we found the connection " << connection << "\n" << endl;
+	cerr << "Client List size is " << clist.size() << "\n" << endl;
+
+	//if(cs!=clist.end()) {
+		unsigned short totalLength, dataLength;
+		unsigned char ipHeaderLength;
+		ipl.GetTotalLength(totalLength);
+		ipl.GetHeaderLength(ipHeaderLength);
+
+		dataLength = totalLength - ipHeaderLength - tcphlen;
+
+		cerr << "\n Total data length is " << dataLength << endl;	
+
+	//}
+
       }
       //  Data from the Sockets layer above  //
       if (event.handle==sock) {
@@ -84,11 +127,11 @@ int main(int argc, char *argv[])
 
 	ConnectionList<TCPState>::iterator cs = clist.FindMatching(s.connection);
 
-	cout << "Received Socket Request:" << s << endl;
+	cerr << "Received Socket Request:\n\n" << s << endl;
 
 	switch(s.type) {
 	case CONNECT: {
-		cout << "Inside connect statement" << endl;
+		cerr << "Inside connect statement" << endl;
 		//start the 3 way handshake - active open
 		Packet synPacket;
 		
@@ -125,7 +168,7 @@ int main(int argc, char *argv[])
 	}
 	case ACCEPT: {
 		//Passive open,(or close)  we just want to listen
-		cout << "Inside accept statement" << endl;
+		cerr << "Inside accept statement" << endl;
 		
 		unsigned int state = (*cs).state.GetState();
 	
@@ -150,12 +193,12 @@ int main(int argc, char *argv[])
 		break;
 	}
 	case STATUS: {
-		cout << "Inside status statment" << endl;
+		cerr << "Inside status statment" << endl;
 		//ignored? sure. 
 		break;
 	}
 	case WRITE: {
-		cout << "Inside write statement" << endl; 
+		cerr << "Inside write statement" << endl; 
 		unsigned int state = (*cs).state.GetState();
 
 		//we shouldn't be writing unless we have a connection established
@@ -182,7 +225,7 @@ int main(int argc, char *argv[])
 		break;
 	}
 	case FORWARD: {
-		cout << "Inside forward statement" << endl; 
+		cerr << "Inside forward statement" << endl; 
 		SockRequestResponse resp;
 		resp.type = STATUS;
 		resp.error = EOK;
@@ -193,7 +236,7 @@ int main(int argc, char *argv[])
 	}
 	case CLOSE: {
 	//FIN stuff. Need to send ack, recieve ack, send fin
-		cout << "Inside close statement" << endl;
+		cerr << "Inside close statement" << endl;
 		break;
 	}
 	default: {
