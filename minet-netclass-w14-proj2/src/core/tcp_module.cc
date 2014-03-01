@@ -11,7 +11,13 @@
 #include <errno.h>
 
 
-#include <iostream>
+#include <iostream>\
+
+#define SEND_ACK 0
+#define SEND_S_ACK 1
+#define SEND_S 2
+#define SEND_F 3
+#define SEND_RST 4
 
 #include "Minet.h"
 #include "packet.h"
@@ -22,24 +28,25 @@
 #include "tcpstate.h"
 
 using std::cerr;
+using std::cout;
 using std::endl;
 using std::cerr;
 using std::string;
 
 void constructPacket(Packet& packet, ConnectionToStateMapping<TCPState>& connectionState,int dataSize, int flag);
+void HandleMux(const MinetHandle &mux, const MinetHandle &sock, ConnectionList<TCPState> &clist);
+void debug_output(ConnectionList<TCPState>::iterator cs, unsigned char flags, unsigned int seqnum, unsigned int acknum);
 
 int main(int argc, char *argv[])
 {
   MinetHandle mux, sock;
   ConnectionList<TCPState> clist;
-
   MinetInit(MINET_TCP_MODULE);
-
   mux=MinetIsModuleInConfig(MINET_IP_MUX) ? MinetConnect(MINET_IP_MUX) : MINET_NOHANDLE;
   sock=MinetIsModuleInConfig(MINET_SOCK_MODULE) ? MinetAccept(MINET_SOCK_MODULE) : MINET_NOHANDLE;
 
   if (MinetIsModuleInConfig(MINET_IP_MUX) && mux==MINET_NOHANDLE) {
-    MinetSendToMonitor(MinetMonitoringEvent("Can't connect to mux"));
+	MinetSendToMonitor(MinetMonitoringEvent("Can't connect to mux"));
     return -1;
   }
 
@@ -53,75 +60,27 @@ int main(int argc, char *argv[])
   MinetSendToMonitor(MinetMonitoringEvent("tcp_module handling TCP traffic"));
 
   MinetEvent event;
-
+  
   while (MinetGetNextEvent(event)==0) {
     // if we received an unexpected type of event, print error
-    if (event.eventtype!=MinetEvent::Dataflow 
-	|| event.direction!=MinetEvent::IN) {
-      MinetSendToMonitor(MinetMonitoringEvent("Unknown event ignored."));
-    // if we received a valid event from Minet, do processing
-    } else {
+    if (event.eventtype!=MinetEvent::Dataflow || event.direction!=MinetEvent::IN) {
+      	MinetSendToMonitor(MinetMonitoringEvent("Unknown event ignored."));
+    	// if we received a valid event from Minet, do processing
+    	if (event.eventtype==MinetEvent::Timeout)
+    	{
+	  cerr << "Timeout event....... \n";
+	  //HandleTimeout(mux, sock, clist);
+    	} 
+   } else {
       //  Data from the IP layer below  //
+      
       if (event.handle==mux) {
-	cerr << "Recieved a MUX event \n\n" << endl;
-	Packet p;
-
-	MinetReceive(mux,p);
-	unsigned tcphlen=TCPHeader::EstimateTCPHeaderLength(p);
-	cerr << "estimated header len="<<tcphlen<<"\n";
-
-	p.ExtractHeaderFromPayload<TCPHeader>(tcphlen);
-	IPHeader ipl=p.FindHeader(Headers::IPHeader);
-	TCPHeader tcph=p.FindHeader(Headers::TCPHeader);
-
-
-	bool checkSum = tcph.IsCorrectChecksum(p);
-	cerr << "TCP Packet: IP Header is "<<ipl<<" and ";
-	cerr << "TCP Header is "<<tcph << " and ";
-
-	cerr << "Checksum is " << (checkSum ? "VALID" : "INVALID");
-	
-
-	//let's get all the info for the ipheader and tcpheader
-	//functionss in tcp.h and ip.h
-	Connection connection; //put it all here
-
-	ipl.GetProtocol(connection.protocol);
-	ipl.GetSourceIP(connection.src);
-	ipl.GetDestIP(connection.dest);	
-
-	unsigned int seqNum, ackNum;
-	unsigned char flags;
-	unsigned short winSize;
-	
-	tcph.GetSourcePort(connection.destport);
-	tcph.GetDestPort(connection.srcport);
-	tcph.GetSeqNum(seqNum);
-	tcph.GetAckNum(ackNum);
-	tcph.GetFlags(flags);
-	tcph.GetWinSize(winSize);
-
-	//now locate the connection using our handy clist
-	ConnectionList<TCPState>::iterator cs = clist.FindMatching(connection);
-	
-	cerr << "\nWe think we found the connection " << connection << "\n" << endl;
-	cerr << "Client List size is " << clist.size() << "\n" << endl;
-
-	//if(cs!=clist.end()) {
-		unsigned short totalLength, dataLength;
-		unsigned char ipHeaderLength;
-		ipl.GetTotalLength(totalLength);
-		ipl.GetHeaderLength(ipHeaderLength);
-
-		dataLength = totalLength - ipHeaderLength - tcphlen;
-
-		cerr << "\n Total data length is " << dataLength << endl;	
-
-	//}
+	HandleMux(mux, sock, clist);
 
       }
       //  Data from the Sockets layer above  //
       if (event.handle==sock) {
+	cerr << "We are in sock handler\n";
 	SockRequestResponse s;
 	MinetReceive(sock,s);
 
@@ -249,10 +208,179 @@ int main(int argc, char *argv[])
 }
 
 
-void constructPacket(Packet& packet, ConnectionToStateMapping<TCPState>& connectionState,int dataSize, int flag) {
-	unsigned char flags = 0;
-	int packetSize = dataSize + TCP_HEADER_BASE_LENGTH + IP_HEADER_BASE_LENGTH;
 
+void HandleMux(const MinetHandle &mux, const MinetHandle &sock, ConnectionList<TCPState> &clist) {
+
+	cerr << "Recieved a MUX event \n\n";
+	Packet p;
+	unsigned short totalLength, dataLength;
+	unsigned char ipHeaderLength;
+	
+	
+	//get the packet
+	MinetReceive(mux,p);
+	
+	//get the header length estimate
+	unsigned tcphlen=TCPHeader::EstimateTCPHeaderLength(p);
+//	cerr << "estimated header len="<<tcphlen<<"\n";
+	
+	//extract headers
+	p.ExtractHeaderFromPayload<TCPHeader>(tcphlen);
+	IPHeader ipl=p.FindHeader(Headers::IPHeader);
+	TCPHeader tcph=p.FindHeader(Headers::TCPHeader);
+
+	// check checksum
+	bool checkSum = tcph.IsCorrectChecksum(p);
+	
+	//output relevant info
+//	cerr << "TCP Packet: IP Header is "<<ipl<<" and ";
+//	cerr << "TCP Header is "<<tcph << " and ";
+//	cerr << "Checksum is " << (checkSum ? "VALID" : "INVALID");
+	
+
+	//let's get all the info for the ipheader and tcpheader
+	//functionss in tcp.h and ip.h
+
+	//new connection object
+	Connection connection; //put it all here
+
+	ipl.GetProtocol(connection.protocol);
+	ipl.GetSourceIP(connection.dest);
+	ipl.GetDestIP(connection.src);	
+	
+
+	unsigned int seqNum, ackNum;
+	unsigned char flags;
+	unsigned short winSize;
+	
+	tcph.GetSourcePort(connection.destport);
+	tcph.GetDestPort(connection.srcport);
+	tcph.GetSeqNum(seqNum);
+	tcph.GetAckNum(ackNum);
+	tcph.GetFlags(flags);
+	tcph.GetWinSize(winSize);
+
+	//now locate the connection using our handy clist
+	ConnectionList<TCPState>::iterator c_list = clist.FindMatching(connection);
+	
+//	cerr << "\nWe think we found the connection " << connection << "\n" << endl;
+//	cerr << "Client List size is " << clist.size() << "\n" << endl;
+	
+	//cerr << "c_list : " << c_list << " clist.end: " << clist.end() <<"\n"<<endl;
+	if(c_list!=clist.end()) {
+	        Packet pToSend;
+		SockRequestResponse sockRq, sockRp;
+	        ipl.GetTotalLength(totalLength);
+	        ipl.GetHeaderLength(ipHeaderLength);
+	        dataLength = totalLength - ipHeaderLength - tcphlen;
+//	        cerr << "\n Total data length is " << dataLength << endl;
+	  
+	        Buffer data = p.GetPayload().ExtractFront(dataLength);
+		unsigned int state = (*c_list).state.GetState();
+		(*c_list).state.rwnd = winSize;
+		
+		cerr <<"BEGINING OF SWITCH STATEMENTS\n";
+		switch(state) {
+		   case CLOSED:
+		     cerr <<"WE ARE CLOSED\n\n";
+		     break;
+		   case LISTEN:
+		     cerr << "WE ARE LISTENING \n\n";
+		  
+		     if (IS_SYN(flags)){
+		       //set the connection first
+		       (*c_list).connection = connection;
+				
+		       //update all states now
+		       (*c_list).state.SetState(SYN_RCVD); //set the state to syn_rcvd if the syn bit is set
+		       (*c_list).state.SetLastRecvd(seqNum);
+		       (*c_list).state.SetSendRwnd(winSize);
+		       (*c_list).state.SetLastSent(90);
+		       (*c_list).state.SetLastAcked(90);
+			 debug_output(c_list, flags, seqNum, ackNum);
+		       //deal with timer stuff
+		       (*c_list).bTmrActive = true;
+		       (*c_list).timeout = Time()+ 30;
+			
+			unsigned char syn_ack = 0;	
+			SET_SYN(syn_ack);
+      			SET_ACK(syn_ack);
+		       constructPacket(pToSend,*c_list, 0,syn_ack);
+		       MinetSend(mux, pToSend);
+			
+			(*c_list).state.SetLastSent((*c_list).state.GetLastSent()+1); 
+			tcph.GetAckNum(ackNum);	 
+		       }
+		      
+		     break;
+		   case SYN_RCVD:
+			 cerr << "We are in SYN_RCVD!!\n";
+			  
+			  debug_output(c_list, flags, seqNum, ackNum);
+			if (IS_ACK(flags) && ((*c_list).state.GetLastRecvd()+1 == seqNum))
+			{
+				printf("Established\n");
+				(*c_list).state.SetState(ESTABLISHED);
+				(*c_list).state.SetSendRwnd(winSize);
+				(*c_list).state.SetLastAcked((*c_list).state.GetLastAcked()+1);
+				(*c_list).bTmrActive = false;
+
+				sockRp.type = WRITE;
+				sockRp.connection = connection; 
+				sockRp.error = EOK; 
+				sockRp.bytes = 0;
+				MinetSend(sock, sockRp);
+				  
+			}
+		     break;
+		   case SYN_SENT:
+			if (IS_SYN(flags) && IS_ACK(flags) && ((*c_list).state.GetLastSent() + 1 == ackNum))
+			{
+				cerr <<"WE ARE IN SYN SENT\n";
+				cerr << "Getlastsent + 1 == acknum\n";
+				(*c_list).state.SetState(ESTABLISHED);
+				(*c_list).state.SetSendRwnd(winSize);
+				(*c_list).state.SetLastAcked(ackNum);
+				(*c_list).state.SetLastRecvd(seqNum);
+				unsigned char setAck = 0;
+				 SET_ACK(setAck);
+				constructPacket(pToSend, *c_list, 0, setAck);
+				MinetSend(mux, pToSend);
+				
+					sockRp.type = WRITE;
+					sockRp.connection = connection;
+					sockRp.error=EOK;
+					sockRp.bytes=0;
+					MinetSend(sock,sockRp);
+				   
+			}
+		     break;
+		   case ESTABLISHED:
+			
+			
+		     break;
+		   case CLOSE_WAIT:
+		     break;
+		   case FIN_WAIT1:
+		     break;
+		   case CLOSING:
+		     break;
+		   case LAST_ACK:
+		     break;
+		   case TIME_WAIT:
+		     break;
+
+		}
+
+	}
+
+
+}
+
+void constructPacket(Packet& packet, ConnectionToStateMapping<TCPState>& connectionState,int dataSize, int flag) {
+	
+	int packetSize = dataSize + TCP_HEADER_BASE_LENGTH + IP_HEADER_BASE_LENGTH;
+	
 	IPHeader ipHeader;
 	IPAddress source = connectionState.connection.src;
 	IPAddress dest = connectionState.connection.dest;
@@ -264,19 +392,6 @@ void constructPacket(Packet& packet, ConnectionToStateMapping<TCPState>& connect
 	//add it to the packet
 	packet.PushFrontHeader(ipHeader);
 
-	if (IS_URG(flag)) {
-		SET_URG(flags);
-	} else if (IS_RST(flag)) {
-		SET_RST(flags);
-	} else if (IS_ACK(flag)) {
-		SET_ACK(flags);
-	} else if (IS_FIN(flag)) {
-		SET_FIN(flags);
-	} else if (IS_SYN(flag)) {
-		SET_SYN(flags);
-	} else if (IS_PSH(flag)) {
-		SET_PSH(flags);
-	}
 
 	TCPHeader tcpHeader;
 	//configure the tcp header - from tcp.h
@@ -285,11 +400,32 @@ void constructPacket(Packet& packet, ConnectionToStateMapping<TCPState>& connect
 	tcpHeader.SetSeqNum(connectionState.state.GetLastSent(),packet);
 	tcpHeader.SetAckNum(connectionState.state.GetLastRecvd()+1,packet);
 	tcpHeader.SetHeaderLen(TCP_HEADER_BASE_LENGTH/4,packet);
-	tcpHeader.SetFlags(flags,packet);
+	tcpHeader.SetFlags(flag,packet);
 	tcpHeader.SetWinSize(connectionState.state.GetN(),packet);
 	tcpHeader.RecomputeChecksum(packet);
 	tcpHeader.SetUrgentPtr(0,packet);
+	unsigned int ackTemp;
+	tcpHeader.GetAckNum(ackTemp);
 	//add the tcp  header
+	cout<<"------ We are sending out a packet! -----"<<endl;
+  	cout<<"AckNum being sent out: "<<connectionState.state.GetLastRecvd()+1<<endl;
+ 	 cout<<"SeqNum being sent out: "<<connectionState.state.GetLastSent()<<endl;
+	cout<<"AckNum being sent out: "<<ackTemp<<endl;  
+	  cout<<"-----------------------------------------"<<endl;
 	packet.PushBackHeader(tcpHeader);
 
+	
+
+}
+
+void debug_output(ConnectionList<TCPState>::iterator cs, unsigned char flags, unsigned int seqnum, unsigned int acknum){
+  cout<<"----------------------------"<<endl;
+  cout<<"Just received seqnum: "<<seqnum<<endl;
+  cout<<"Just received acknum: "<<acknum<<endl;
+  cout<<"State: "<<(*cs).state.GetState()<<endl;
+  cout<<"LastRecvd: "<<(*cs).state.GetLastRecvd()<<endl;
+  cout<<"LastSent: "<<(*cs).state.GetLastSent()<<endl;
+  cout<<"LastAcked: "<<(*cs).state.GetLastAcked()<<endl;
+  printf("Flags: %d \n", flags);
+  cout<<"----------------------------"<<endl;
 }
