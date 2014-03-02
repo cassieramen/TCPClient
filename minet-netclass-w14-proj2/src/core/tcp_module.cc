@@ -233,10 +233,6 @@ int main(int argc, char *argv[])
 		unsigned int state = (*cs).state.GetState();
 
 		switch(state) {
-		case SYN_SENT: {
-		//we sent out our syn, should be wrapped up
-			clist.erase(cs);
-		} break;
 		case SYN_RCVD: {
 			Packet packet;
 			unsigned char fin = 0;
@@ -247,18 +243,61 @@ int main(int argc, char *argv[])
 			(*cs).state.SetLastSent((*cs).state.GetLastSent()+1); 
 			(*cs).state.SetState(FIN_WAIT1);
 		} break;
-		}
+		case SYN_SENT: {
+			clist.erase(cs);
+		} break;
+		case ESTABLISHED: {
+			Packet packet;
+			unsigned char fin = 0;
+			SET_FIN(fin);
+			constructPacket(packet, *cs, 0, fin);
+			MinetSend(mux, packet);
 
+			(*cs).state.SetLastSent((*cs).state.GetLastSent()+1);
+			(*cs).state.SetState(FIN_WAIT1);
+		} break;
+		case CLOSE_WAIT: {
+			Packet packet;
+			unsigned char fin = 0;
+			SET_FIN(fin);
+			constructPacket(packet, *cs, 0,fin);
+			MinetSend(mux, packet);
+			
+			(*cs).state.SetLastSent((*cs).state.GetLastSent()+1);
+			(*cs).state.SetState(LAST_ACK);
+		} break;
+		case CLOSING: {
+			clist.erase(cs);
+			TCPState tcpState = TCPState(rand(), LISTEN, 3); //uck, 3 tries
+			ConnectionToStateMapping<TCPState> connectionState;
+			connectionState.connection = s.connection;
+			connectionState.state = tcpState;
+			connectionState.bTmrActive = false;
+			clist.push_front(connectionState); //bye
+
+			SockRequestResponse resp;
+			resp.type = WRITE;
+			resp.connection = s.connection;
+			resp.bytes = 0;
+			resp.error = EOK;
+			MinetSend(sock, resp);
+		} break;
+		}
 	}
 	default: {
+	//This is just failure. So just report it?
+		SockRequestResponse resp;
+		resp.type = STATUS;
+		resp.error = EWHAT;
+		MinetSend(sock, resp);
 	}
 	}
       }
     }
   }
 
-  ConnectionList<TCPState>::iterator first = clist.FindEarliest();
-  timeout = Time() - (*first).timeout;
+  //ConnectionList<TCPState>::iterator first = clist.FindEarliest();
+  //timeout = Time() - (*first).timeout;
   return 0;
 }
 
