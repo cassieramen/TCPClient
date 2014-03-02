@@ -60,8 +60,8 @@ int main(int argc, char *argv[])
   MinetSendToMonitor(MinetMonitoringEvent("tcp_module handling TCP traffic"));
 
   MinetEvent event;
-  
-  while (MinetGetNextEvent(event)==0) {
+  double timeout = -1;
+  while (MinetGetNextEvent(event,timeout)==0) {
     // if we received an unexpected type of event, print error
     if (event.eventtype!=MinetEvent::Dataflow || event.direction!=MinetEvent::IN) {
       	MinetSendToMonitor(MinetMonitoringEvent("Unknown event ignored."));
@@ -69,7 +69,41 @@ int main(int argc, char *argv[])
     	if (event.eventtype==MinetEvent::Timeout)
     	{
 	  cerr << "Timeout event....... \n";
-	  //HandleTimeout(mux, sock, clist);
+	
+	  SockRequestResponse resp;
+	  MinetReceive(sock, resp);
+	  ConnectionList<TCPState>::iterator cs = clist.FindMatching(resp.connection);
+	  if(cs != clist.end()) {
+	    if(Time().operator > ((*cs).timeout)) {
+	      unsigned int state = (*cs).state.GetState();
+	      if (state == SYN_SENT || state == TIME_WAIT || (*cs).state.ExpireTimerTries()) {
+		cerr << "CLOSING THIS CONNECTION WOOO!" << endl;
+		clist.erase(cs);	
+	      } else if (state == ESTABLISHED) {
+		(*cs).timeout = Time() + 50; //give it extra
+		ConnectionToStateMapping<TCPState>& connectionState = (*cs);
+		int bufferLen = connectionState.state.SendBuffer.GetSize(); //what's in there now
+		
+		char buffer[TCP_MAXIMUM_SEGMENT_SIZE];
+		int bufferPlaceHolder = 0;
+
+		while( bufferLen > 0) {
+		  int data = connectionState.state.SendBuffer.GetData(buffer,TCP_MAXIMUM_SEGMENT_SIZE,bufferPlaceHolder);
+		  Packet packet = Packet(buffer, data);
+
+		  constructPacket(packet,*cs, data, 0);
+		  TCPHeader tcph = packet.FindHeader(Headers::TCPHeader);
+		  tcph.SetSeqNum(connectionState.state.GetLastSent() + bufferPlaceHolder + data, packet);
+		  packet.PushBackHeader(tcph);
+
+		  MinetSend(mux, packet);
+		  bufferPlaceHolder += TCP_MAXIMUM_SEGMENT_SIZE;
+ 		  bufferLen -= TCP_MAXIMUM_SEGMENT_SIZE;
+		}
+
+	      }
+	    }
+	  } 
     	} 
    } else {
       //  Data from the IP layer below  //
@@ -196,7 +230,25 @@ int main(int argc, char *argv[])
 	case CLOSE: {
 	//FIN stuff. Need to send ack, recieve ack, send fin
 		cerr << "Inside close statement" << endl;
-		break;
+		unsigned int state = (*cs).state.GetState();
+
+		switch(state) {
+		case SYN_SENT: {
+		//we sent out our syn, should be wrapped up
+			clist.erase(cs);
+		} break;
+		case SYN_RCVD: {
+			Packet packet;
+			unsigned char fin = 0;
+			SET_FIN(fin);
+			constructPacket(packet, *cs, 0,fin);
+			MinetSend(mux,packet);
+				
+			(*cs).state.SetLastSent((*cs).state.GetLastSent()+1); 
+			(*cs).state.SetState(FIN_WAIT1);
+		} break;
+		}
+
 	}
 	default: {
 	}
@@ -204,6 +256,9 @@ int main(int argc, char *argv[])
       }
     }
   }
+
+  ConnectionList<TCPState>::iterator first = clist.FindEarliest();
+  timeout = Time() - (*first).timeout;
   return 0;
 }
 
@@ -332,6 +387,7 @@ void HandleMux(const MinetHandle &mux, const MinetHandle &sock, ConnectionList<T
 				MinetSend(sock, sockRp);
 				  
 			}
+				
 		     break;
 		   case SYN_SENT:
 			if (IS_SYN(flags) && IS_ACK(flags) && ((*c_list).state.GetLastSent() + 1 == ackNum))
