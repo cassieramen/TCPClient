@@ -25,6 +25,15 @@ Minet - the core distribution itself.
 Minet Timeline - A post-mortem tool for looking at Minet log files.
 Minet JavaGUI - A graphical interface to the Minet stack.
 
+Shana Azria: ssa047
+Cassandra Rommel: cro947
 
+Shana Azria did the mux handler
+Cassandra Rommel did the sock handler and the timeout handler
 
+We were doing fine until we go to the established case in the mux handler. At this point
+the code started looping each time going through the switches again and 
+we could not figure out where it was coming from. 
+Since we had implemented most of everything, we were unable to find the source of
+the problem. 
 
